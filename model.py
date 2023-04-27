@@ -11,6 +11,9 @@ from typing import Optional, Iterable
 import torch
 import torch.nn as nn
 import torchvision.transforms.functional as TF
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+import torch.nn.functional as F
 
 input_channels = 3
 first_fmap_channels = 64
@@ -366,32 +369,208 @@ class DiffusionNet(nn.Module):
         segmentation_mask = self.decoder(*enc_fmaps, t=t)
         return segmentation_mask
     
+# Super Resolution Model
+    
+class ResidualBlock(nn.Module):
+    def __init__(self, in_features):
+        super(ResidualBlock, self).__init__()
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(in_features, in_features, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(in_features, 0.8),
+            nn.PReLU(),
+            nn.Conv2d(in_features, in_features, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(in_features, 0.8),
+        )
+
+    def forward(self, x):
+        return x + self.conv_block(x)
+
+
+class GeneratorResNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, n_residual_blocks=16):
+        super(GeneratorResNet, self).__init__()
+
+        # First layer
+        self.conv1 = nn.Sequential(nn.Conv2d(in_channels, 64, kernel_size=9, stride=1, padding=4), nn.PReLU())
+
+        # Residual blocks
+        res_blocks = []
+        for _ in range(n_residual_blocks):
+            res_blocks.append(ResidualBlock(64))
+        self.res_blocks = nn.Sequential(*res_blocks)
+
+        # Second conv layer post residual blocks
+        self.conv2 = nn.Sequential(nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(64, 0.8))
+
+        # Upsampling layers
+        upsampling = []
+        for out_features in range(2):
+            upsampling += [
+                # nn.Upsample(scale_factor=2),
+                nn.Conv2d(64, 256, 3, 1, 1),
+                nn.BatchNorm2d(256),
+                nn.PixelShuffle(upscale_factor=2),
+                nn.PReLU(),
+            ]
+        self.upsampling = nn.Sequential(*upsampling)
+
+        # Final output layer
+        self.conv3 = nn.Sequential(nn.Conv2d(64, out_channels, kernel_size=9, stride=1, padding=4), nn.Tanh())
+
+    def forward(self, x):
+        out1 = self.conv1(x)
+        out = self.res_blocks(out1)
+        out2 = self.conv2(out)
+        out = torch.add(out1, out2)
+        out = self.upsampling(out)
+        out = self.conv3(out)
+        return out
+    
+# Segmentation model
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DoubleConv, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+class UNET(nn.Module):
+    def __init__(
+            self, in_channels=3, out_channels=1, features=[64, 128, 256, 512],
+    ):
+        super(UNET, self).__init__()
+        self.ups = nn.ModuleList()
+        self.downs = nn.ModuleList()
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # Down part of UNET
+        for feature in features:
+            self.downs.append(DoubleConv(in_channels, feature))
+            in_channels = feature
+
+        # Up part of UNET
+        for feature in reversed(features):
+            self.ups.append(
+                nn.ConvTranspose2d(
+                    feature*2, feature, kernel_size=2, stride=2,
+                )
+            )
+            self.ups.append(DoubleConv(feature*2, feature))
+
+        self.bottleneck = DoubleConv(features[-1], features[-1]*2)
+        self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
+
+    def forward(self, x):
+        skip_connections = []
+
+        for down in self.downs:
+            x = down(x)
+            skip_connections.append(x)
+            x = self.pool(x)
+
+        x = self.bottleneck(x)
+        skip_connections = skip_connections[::-1]
+
+        for idx in range(0, len(self.ups), 2):
+            x = self.ups[idx](x)
+            skip_connection = skip_connections[idx//2]
+
+            if x.shape != skip_connection.shape:
+                x = TF.resize(x, size=skip_connection.shape[2:])
+
+            concat_skip = torch.cat((skip_connection, x), dim=1)
+            x = self.ups[idx+1](concat_skip)
+
+        return self.final_conv(x)
+
+
 class Trainer:
-    def __init__(self, model, diffusion_utils, 
+    def __init__(self, model, diffusion_utils, seg_model, superResolutionModel,
                  device='cuda', pretrained = True):
         
         self.device = device
         self.model = model.to(self.device)
         self.diffusion_utils = diffusion_utils
+        self.seg_model = seg_model.to(self.device)
+        self.superResolutionModel = superResolutionModel.to(self.device)
         self.best_loss = None
         if pretrained:
             self.load()
             
     def load(self):
         print("=> Loading checkpoint")
-        checkpoint = torch.load("/home/bhanu/Desktop/major project/npeApp/models/ddpm_model.pth",map_location=torch.device(self.device))
-        self.model.load_state_dict(checkpoint["state_dict"])
+        ddpmCheckpoint = torch.load("/home/bhanu/Desktop/major project/npeApp/models/ddpm_model.pth",map_location=torch.device(self.device))
+        self.model.load_state_dict(ddpmCheckpoint["state_dict"])
+        self.superResolutionModel.load_state_dict(torch.load("/home/bhanu/Desktop/major project/npeApp/models/generator.pth"))
+        segmentationCheckpoint = torch.load("/home/bhanu/Desktop/major project/npeApp/models/checkpoint.pth",map_location=torch.device(DEVICE))
+        self.seg_model.load_state_dict(segmentationCheckpoint["state_dict"])
+
+    def segment(self,image):
+        image = image/255
+        self.seg_model.eval()
+        IMAGE_HEIGHT = 384
+        IMAGE_WIDTH = 384
+        seg_transforms = A.Compose(
+                [
+                    A.Resize(height=IMAGE_HEIGHT, width=IMAGE_WIDTH),
+                    ToTensorV2(),
+                ],
+            )
+        aug = seg_transforms(image=image)
+        image = aug["image"].unsqueeze(dim=0).to(DEVICE,dtype=torch.float)
+        preds = F.softmax(self.seg_model(image), dim=1)
+        preds = preds.argmax(dim=1)
+        preds = preds.cpu().numpy()[0]
+        return preds
+    
+    def applyColor(self,image,preds,classIndex, color,mask):
+        mask = sum(cv2.split(mask))/3
+        mask[mask != 255] = 0
+        mask[mask == 255] = 1
+        mask = mask.astype('float32')
+        target = np.where(preds == classIndex)
+        classMask = np.where(preds == classIndex, 1, 0)
+        image[target] = color
+        finalMask = mask + classMask
+        finalMask = np.clip(finalMask, 0, 1)*255
+        finalMask = np.repeat(finalMask.reshape(finalMask.shape[1], finalMask.shape[0], 1), 3, axis=2)
+        return image, finalMask
+    
+    def superResolution(self,image):
+        self.superResolutionModel.eval()
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        image = cv2.resize(image,(100,100),interpolation=cv2.INTER_AREA)
+        superResolutionTransform = transforms.Compose(
+            [   
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]
+        )
+        image = superResolutionTransform(image)
+        image = torch.unsqueeze(image, 0).to(DEVICE)
+        image = self.superResolutionModel(image)
+        image = image.detach().cpu()
+        image = (image.clamp(-1, 1) + 1) / 2
+
+        image = image[0].permute(1, 2, 0).numpy() * 255
+        image = image.astype(np.uint8)
+        return image
     
     def addNoiseandMaskedDenoise(self,tback,image,mask,display=False):
         w,h,_ = image.shape
         mask = cv2.resize(mask,(128,128),interpolation=cv2.INTER_NEAREST)
         image = cv2.resize(image,(128,128),interpolation=cv2.INTER_AREA)
-        if display:
-            plt.imshow(image)
-            plt.xticks([], [])
-            plt.yticks([], [])
-            plt.savefig("PaintedImage.png")
-            plt.show()
+        imageDisplay = image.copy()
         imgTransforms = transforms.Compose([
                 transforms.Resize((128,128)), 
                 transforms.ToTensor(),
@@ -403,17 +582,6 @@ class Trainer:
         mask = torch.unsqueeze(torch.tensor(mask), 0).to(self.device)
         t = (torch.ones(images.shape[0])*tback).long().to(self.device)
         x_t, _ = self.diffusion_utils.noiseImage(images.to(self.device), t)
-        noisyImages = x_t.cpu()
-        noisyImages = (noisyImages.clamp(-1, 1) + 1) / 2
-        n = images.shape[0]
-        img = noisyImages[0].permute(1, 2, 0).numpy() * 255
-        img = img.astype(np.uint8)
-        if display:
-            plt.imshow(img)
-            plt.xticks([], [])
-            plt.yticks([], [])
-            plt.savefig("NoisyImages.png")
-            plt.show()
         self.model.eval()
         with torch.no_grad():
             iterations = range(1, tback)
@@ -431,97 +599,28 @@ class Trainer:
                 #predict noise pertaining for a given timestep
                 predicted_noise = self.model(x_t, t)
                 
-                if i > 1:
-                    noise = torch.randn_like(x_t).to(self.device)
-                else:
-                    noise = torch.zeros_like(x_t).to(self.device)
+                if i > 1:noise = torch.randn_like(x_t).to(self.device)
+                else:noise = torch.zeros_like(x_t).to(self.device)
                 
                 x_t = 1/torch.sqrt(alpha) * (x_t - ((one_minus_alpha / torch.sqrt(one_minus_alpha_hat)) * predicted_noise))
                 x_t = x_t + (torch.sqrt(beta) * noise)
-                if i > 10:
-                    x_t = x_t*mask + (1-mask)*self.diffusion_utils.noiseImage(images.to(self.device), t_1)[0]
+                if i > 20:x_t = x_t*mask + (1-mask)*self.diffusion_utils.noiseImage(images.to(self.device), t_1)[0]
         x_t = x_t.cpu()
         x_t = (x_t.clamp(-1, 1) + 1) / 2
 
         img = x_t[0].permute(1, 2, 0).numpy() * 255
         img = img.astype(np.uint8)
+        superImg = self.superResolution(img)
+
         if display:
+            plt.imshow(imageDisplay)
+            plt.xticks([], [])
+            plt.yticks([], [])
+            plt.savefig("PaintedImage.png")
+            plt.show()
             plt.imshow(img)
             plt.xticks([], [])
             plt.yticks([], [])
             plt.savefig("DeNoisedImages.png")
             plt.show()
-        img = cv2.resize(img,(256,256),interpolation=cv2.INTER_AREA)
-        return img
-    
-    def addNoiseandDenoise(self,tback,file_path, display = False):
-        imgTransforms = transforms.Compose([
-                transforms.Resize((128,128)), 
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-            ])
-        image = Image.open(file_path).convert("RGB")
-        image = imgTransforms(image)
-        images = torch.unsqueeze(image, 0)
-            
-        t = (torch.ones(images.shape[0])*tback).long().to(self.device)
-        x_t, _ = self.diffusion_utils.noiseImage(images.to(self.device), t)
-        noisyImages = x_t.cpu()
-        noisyImages = (noisyImages.clamp(-1, 1) + 1) / 2
-        n = images.shape[0]
-        img = noisyImages[0].permute(1, 2, 0).numpy() * 255
-        img = img.astype(np.uint8)
-        if display:
-            plt.imshow(img)
-            plt.xticks([], [])
-            plt.yticks([], [])
-            plt.savefig("NoisyImages.png")
-            plt.show()
-        self.model.eval()
-        with torch.no_grad():
-            iterations = range(1, tback)
-            for i in tqdm(reversed(iterations)):
-                #batch of timesteps t
-                t = (torch.ones(x_t.shape[0]) * i).long().to(self.device)
-                
-                #params
-                alpha = self.diffusion_utils.alphas[t][:, None, None, None]
-                beta = self.diffusion_utils.betas[t][:, None, None, None]
-                alpha_hat = self.diffusion_utils.alpha_hat[t][:, None, None, None]
-                one_minus_alpha = 1 - alpha
-                one_minus_alpha_hat = 1 - alpha_hat
-                
-                #predict noise pertaining for a given timestep
-                predicted_noise = self.model(x_t, t)
-                
-                if i > 1:
-                    noise = torch.randn_like(x_t).to(self.device)
-                else:
-                    noise = torch.zeros_like(x_t).to(self.device)
-                
-                x_t = 1/torch.sqrt(alpha) * (x_t - ((one_minus_alpha / torch.sqrt(one_minus_alpha_hat)) * predicted_noise))
-                x_t = x_t + (torch.sqrt(beta) * noise)
-        x_t = x_t.cpu()
-        x_t = (x_t.clamp(-1, 1) + 1) / 2
-
-        img = x_t[0].permute(1, 2, 0).numpy() * 255
-        img = img.astype(np.uint8)
-        if display:
-            plt.imshow(img)
-            plt.xticks([], [])
-            plt.yticks([], [])
-            plt.savefig("DeNoisedImages.png")
-            plt.show()
-        return img
-
-
-# #encoder, decoder model initialisation
-# encoder = Encoder(input_channels, time_embedding, block_layers=[2, 2, 2, 2])
-# decoder = Decoder(last_fmap_channels, output_channels, time_embedding, first_fmap_channels)
-# model = DiffusionNet(encoder, decoder)
-
-# #diffusion utilities class initialisaion
-# diffusion_utils = DiffusionUtils(n_timesteps, beta_min, beta_max, DEVICE, scheduler=beta_scheduler)
-# trainer = Trainer(model, diffusion_utils, device=DEVICE, pretrained = True)
-
-# trainer.addNoiseandDenoise(200,file_path="test.jpeg")
+        return img,superImg

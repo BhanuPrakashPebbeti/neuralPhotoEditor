@@ -64,13 +64,15 @@ class Button:
             self.dynamic_elecation = self.elevation
             self.top_color = '#475F77'
         return system
-    
+
 def cv2ImageToSurface(cv2Image):
     if cv2Image.dtype.name == 'uint16':
         cv2Image = (cv2Image).astype('uint8')
     size = cv2Image.shape[1::-1]
     if len(cv2Image.shape) == 2:
-        cv2Image = np.repeat(cv2Image.reshape(size[1], size[0], 1), 3, axis = 2)
+        cv2Image = np.repeat(cv2Image.reshape(size[1], size[0], 1), 3, axis=2)
+    elif len(cv2Image.shape) == 3 and cv2Image.shape[2] == 1:
+        cv2Image = np.repeat(cv2Image, 3, axis=2)
     surface = pygame.image.frombuffer(cv2Image.flatten(), size, "RGB")
     return surface.convert()
 
@@ -81,6 +83,26 @@ def prompt_file():
     file_name = tkinter.filedialog.askopenfilename(parent=top)
     top.destroy()
     return file_name
+
+PALETTE = {
+    ( 70, 70, 70)  : 0 ,
+    (250,170,160) : 1 ,
+    ( 81,  0, 81) : 2 ,
+    (244, 35,232) : 3 , 
+    (220, 190, 40) : 4 , 
+    (152,251,152) : 5 ,
+    (220, 20, 60) : 6 ,
+    (246, 198, 145) : 7 ,
+    (255,  0,  0) : 8 , 
+    (  0,  0,230) : 9 ,
+    (119, 11, 32) : 10 , 
+}
+
+def convert2RGB(array):
+    result = np.zeros((array.shape[0], array.shape[1], 3))
+    for value, key in PALETTE.items():
+        result[np.where(array == key)] = (value[2],value[1],value[0])
+    return result.astype('uint8')
     
 print()
 print("                ==========================================================================    ")
@@ -93,18 +115,21 @@ pygame.font.init()
 clock = pygame.time.Clock()
 button_font = pygame.font.Font(None,30)
 STAT_FONT = pygame.font.SysFont("comicsans", 40)
-screen = pygame.display.set_mode((750, 500))
+screen = pygame.display.set_mode((1125, 900))
 pygame.display.set_caption("Application")
 
-button1 = Button('Upload',200,40,(525,50),5,button_font)
-button2 = Button('Draw',200,40,(525,125),5,button_font)
-button3 = Button('Revert Changes',200,40,(525,200),5,button_font)
-button4 = Button('Enhance',200,40,(525,275),5,button_font)
-button5 = Button('Save',200,40,(525,350),5,button_font)
-slider = Slider(screen, 525, 440, 200, 10, min=1, max=20, step=1, initial=1, handleColour=(255,255,0))
-output = TextBox(screen, 605, 460, 40, 35, fontSize=30)
-
+button1 = Button('Upload',200,40,(900,50),5,button_font)
+button2 = Button('Draw',200,40,(900,125),5,button_font)
+button3 = Button('Revert Changes',200,40,(900,200),5,button_font)
+button4 = Button('Enhance',200,40,(900,275),5,button_font)
+button5 = Button('Save',200,40,(900,350),5,button_font)
+slider = Slider(screen, 900, 440, 200, 10, min=1, max=20, step=1, initial=5, handleColour=(255,255,0))
+output = TextBox(screen, 980, 460, 40, 35, fontSize=30)
 output.disable()
+
+tslider = Slider(screen, 900, 525, 200, 10, min=200, max=475, step=1, initial=400, handleColour=(255,255,0))
+toutput = TextBox(screen, 980, 550, 50, 35, fontSize=30)
+toutput.disable()
 
 input_size = (400,400)
 run = True
@@ -120,6 +145,7 @@ originalframe = None
 original_rgbframe = None
 enhancedFrame = None
 enhancedImage = None
+mask = None
 
 logo = cv2.imread("Logo.png")
 logo = cv2.resize(logo,input_size)
@@ -133,10 +159,12 @@ buttonbg = cv2ImageToSurface(buttonbg)
 encoder = Encoder(input_channels, time_embedding, block_layers=[2, 2, 2, 2])
 decoder = Decoder(last_fmap_channels, output_channels, time_embedding, first_fmap_channels)
 model = DiffusionNet(encoder, decoder)
+seg_model = UNET(in_channels = 3 , out_channels = 11)
+generator = GeneratorResNet()
 
 #diffusion utilities class initialisaion
 diffusion_utils = DiffusionUtils(n_timesteps, beta_min, beta_max, DEVICE, scheduler=beta_scheduler)
-trainer = Trainer(model, diffusion_utils, device=DEVICE, pretrained = True)
+trainer = Trainer(model, diffusion_utils,seg_model, generator, device=DEVICE, pretrained = True)
 
 while run:
     events = pygame.event.get()
@@ -148,12 +176,21 @@ while run:
             break
         if pygame.mouse.get_pressed()[0] and drawing:
             pos = pygame.mouse.get_pos()
-            pos = (pos[0]-50, pos[1]-50)
+            pos = (pos[0]-25, pos[1]-50)
             editframe = cv2.circle(editframe, pos, radius, color_code[0], -1)
+            DiffusionMask = cv2.circle(DiffusionMask, pos, radius, (255,255,255), -1)
             rgbframe = cv2ImageToSurface(editframe)
 
+        if pygame.mouse.get_pressed()[0]:
+            pos = pygame.mouse.get_pos()
+            if ((pos[0] > 450) and (pos[1] > 50)) and ((pos[0] < 850) and (pos[1] < 450)):
+                pos = (pos[0]-450, pos[1]-50)
+                index = segMask[pos[1],pos[0]]
+                editframe,DiffusionMask = trainer.applyColor(editframe,segMask,index, color_code[0],DiffusionMask)
+                rgbframe = cv2ImageToSurface(editframe)
+
     screen.fill((0,0,0))
-    screen.blit(buttonbg, (500,0))
+    screen.blit(buttonbg, (875,0))
     upload = button1.draw(upload)
     draw = button2.draw(draw)
     revert = button3.draw(revert)
@@ -163,19 +200,35 @@ while run:
     if upload:
         f = prompt_file()
         if f:
+            draw = False
+            drawing = False
+            save = False
+            cancel = False
+            revert = False
+            editframe = None
+            enhance = False
+            originalframe = None
+            original_rgbframe = None
+            enhancedFrame = None
+            enhancedImage = None
+            mask = None
             frame = cv2.imread(f)
             frame = cv2.resize(frame,input_size)
             editframe = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             originalframe = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            DiffusionMask = np.zeros((input_size[0],input_size[1],3), np.uint8)
             rgbframe = cv2ImageToSurface(editframe)
             original_rgbframe = cv2ImageToSurface(originalframe)
+            mask = trainer.segment(originalframe)
+            segMask = cv2.resize(mask, (originalframe.shape[1], originalframe.shape[0]),interpolation=cv2.INTER_NEAREST)
+            mask = convert2RGB(segMask)
+            mask = cv2ImageToSurface(mask)
             upload = False
 
     if draw:
         color_code = colorchooser.askcolor(title="Choose color")
         draw = False
         drawing = True
-        # color = getColor()
         if editframe is None:
             f = prompt_file()
             upload = False
@@ -192,14 +245,16 @@ while run:
         revert = False
 
     if enhance and (originalframe is not None) and (editframe is not None):
-        difference = cv2.subtract(editframe, originalframe)
-        Conv_hsv_Gray = cv2.cvtColor(difference, cv2.COLOR_BGR2GRAY)
-        ret, mask = cv2.threshold(Conv_hsv_Gray, 0, 255,cv2.THRESH_BINARY_INV |cv2.THRESH_OTSU)
-        mask[mask != 255] = 1
-        mask[mask == 255] = 0
+        DiffusionMask = sum(cv2.split(DiffusionMask))/3
+        DiffusionMask[DiffusionMask != 255] = 0
+        DiffusionMask[DiffusionMask == 255] = 1
+        DiffusionMask = DiffusionMask.astype('float32')
         enhance = False
-        enhancedImage = trainer.addNoiseandMaskedDenoise(400,editframe,mask)
+        enhancedImage,superImg = trainer.addNoiseandMaskedDenoise(tstamp,editframe,DiffusionMask)
         enhancedFrame = cv2ImageToSurface(enhancedImage)
+        superImg = cv2ImageToSurface(superImg)
+        enhancedImageScales = cv2.resize(enhancedImage,(400,400))
+        enhancedImageScales = cv2ImageToSurface(enhancedImageScales)
 
     if save and (enhancedImage is not None):
         filename = tkinter.filedialog.asksaveasfile(mode='w', defaultextension=".jpg")
@@ -208,28 +263,21 @@ while run:
         save = False
         pygame.quit()
         quit()
-        run = True
-        upload = False
-        draw = False
-        drawing = False
-        save = False
-        cancel = False
-        revert = False
-        editframe = None
-        enhance = False
-        originalframe = None
-        original_rgbframe = None
-        enhancedFrame = None
-        enhancedImage = None
-        rgbframe = cv2ImageToSurface(logo)
-    
+
     if enhancedFrame is not None:
-        screen.blit(enhancedFrame, (122,122))
+        screen.blit(rgbframe, (25,50))
+        screen.blit(enhancedFrame, (586,186))
+        screen.blit(superImg, (25,475))
+        screen.blit(enhancedImageScales, (450,475))
     else:
-        screen.blit(rgbframe, (50,50))
+        screen.blit(rgbframe, (25,50))
+        if mask is not None:
+            screen.blit(mask, (450,50))
 
     radius = slider.getValue()
     output.setText(radius)
+    tstamp = tslider.getValue()
+    toutput.setText(tstamp)
     pygame_widgets.update(events)
     pygame.display.update()
     clock.tick(300)
