@@ -1,12 +1,20 @@
 # Neural Photo Editor
 
-![Neural Photo Editor](https://i.imgur.com/example1.png)
+<p align="center">
+  <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/neuralPhotoEditor.png" alt="Neural Photo Editor" width="60%">
+</p>
 
-## Overview
+## 🔍 Overview
 
 Neural Photo Editor is an AI-powered application that enables intuitive image editing through deep generative models. The tool allows users to modify specific facial features by simply painting over them, with the AI generating realistic and coherent changes that seamlessly integrate with the rest of the image.
 
-## Features
+## ✨ Results
+
+<p align="center">
+  <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/NeuralPhotoEditorResults.png" alt="Results" width="60%">
+</p>
+
+## 🛠️ Features
 
 - **Intuitive Brush Interface**: Paint directly on images to edit specific areas
 - **Automatic Segmentation**: Uses semantic segmentation masks for precise facial feature selection
@@ -15,9 +23,48 @@ Neural Photo Editor is an AI-powered application that enables intuitive image ed
 - **Super Resolution**: Enhances low-resolution edited images to high-quality outputs
 - **Adjustable Editing Parameters**: Control brush size and diffusion timestep strength
 
-![Editing Results](https://i.imgur.com/example2.png)
+## 🚀 How to Use
 
-## Architecture
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>1️⃣ Upload</h3>
+      <p>Upload an image to display semantic segmentation masks.</p>
+      <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/npe-1.png" alt="Upload" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <h3>2️⃣ Select Paint Brush</h3>
+      <p>Choose the paint brush tool from the toolbar to begin editing.</p>
+      <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/npe-2.png" alt="Select Paint Brush" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>3️⃣ Draw using Segmentation</h3>
+      <p>Use the segmentation masks to precisely select and modify facial features.</p>
+      <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/npe-3.png" alt="Draw using Segmentation" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <h3>4️⃣ Draw using Free Hand to modify facial features.</h3>
+      <p>For more custom edits, use the free hand drawing mode.</p>
+      <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/npe-4.png" alt="Draw using Free Hand" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>5️⃣ Edit/Enhance</h3>
+      <p>Apply enhancements and edits to your selected areas.</p>
+      <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/npe-5.png" alt="Edit/Enhance" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <h3>6️⃣ Save</h3>
+      <p>Save your edited image when you're satisfied with the results.</p>
+      <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/npe-6.png" alt="Save" width="100%">
+    </td>
+  </tr>
+</table>
+
+## 🧠 Architecture
 
 The Neural Photo Editor integrates several deep learning models working together:
 
@@ -33,8 +80,6 @@ The primary editing model uses a diffusion-based approach to transform images.
   - Adam optimizer with 1e-3 learning rate
   - Linear beta scheduling (β_min=1e-4, β_max=2e-2)
   - Batch size of 40
-
-![DDPM Architecture](https://i.imgur.com/example3.png)
 
 ### 2. U-Net Segmentation Model
 
@@ -54,7 +99,7 @@ Enhances the quality of edited images:
 - **Output Resolution**: Higher quality images (up to 512x512)
 - **Purpose**: Improves details in the final edited image
 
-## The Theory Behind Diffusion Models
+## 📚 The Theory Behind Diffusion Models
 
 Diffusion models represent a powerful class of generative models that work by gradually adding noise to data and then learning to reverse this process. The fundamental principle behind diffusion models involves two key processes:
 
@@ -86,7 +131,11 @@ The model learns to reverse the forward process, gradually removing noise to rec
 - This prediction allows reconstruction of a slightly cleaner image
 - By t=0, the model has recovered a clean image
 
-## Harnessing Diffusion for Controlled Editing
+<p align="center">
+  <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/ddpm.png" alt="DDPM" width="80%">
+</p>
+
+## 🔮 Harnessing Diffusion for Controlled Editing
 
 Neural Photo Editor introduces a novel approach that leverages the power of diffusion models for targeted image editing:
 
@@ -112,7 +161,17 @@ Where:
 - x_0 is the original image
 - ε is random noise
 
-![Diffusion Editing Process](https://i.imgur.com/example4.png)
+<p align="center">
+  <strong>Original Image | Painted Image | Painted Image after adding Noise | Restored/Edited Image | Controlled Restored/Edited Image</strong>
+</p>
+
+<p align="center">
+  <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/neuralPhotoEditorResults1.png" alt="Neural Photo Editor" width="60%">
+</p>
+
+<p align="center">
+  <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/neuralPhotoEditorResults2.png" alt="Neural Photo Editor" width="60%">
+</p>
 
 ### Controlling Edit Strength with Timestep Selection
 
@@ -123,7 +182,19 @@ The timestep parameter offers precise control over how strongly the diffusion mo
 
 This timestep tuning enables a balance between edit fidelity and natural appearance.
 
-## The Complete Editing Workflow
+<p align="center">
+  <strong>Timestep vs Editing vs Controlled Editing</strong>
+</p>
+
+<p align="center">
+  <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/editingvsT-1.png" alt="Neural Photo Editor" width="60%">
+</p>
+
+<p align="center">
+  <img src="https://github.com/BhanuPrakashPebbeti/neuralPhotoEditor/blob/main/assets/editingvsT-2.png" alt="Neural Photo Editor" width="60%">
+</p>
+
+## 🔄 The Complete Editing Workflow
 
 The Neural Photo Editor workflow seamlessly combines user interaction with advanced AI processing:
 
@@ -155,7 +226,7 @@ This approach allows for highly localized edits while maintaining global consist
 
 Finally, the edited image is passed through the super-resolution model to enhance details and produce a polished result.
 
-## Why Diffusion Models Outperform Alternatives
+## 🏆 Why Diffusion Models Outperform Alternatives
 
 Our extensive experimentation revealed several advantages of diffusion models over alternatives:
 
@@ -171,7 +242,7 @@ Our extensive experimentation revealed several advantages of diffusion models ov
 - **More Natural Transitions**: Diffusion creates more natural blending between edited and original regions
 - **Greater Flexibility**: Timestep tuning allows more control than VQVAE's discrete latent spaces
 
-## Limitations and Future Directions
+## ⚠️ Limitations and Future Directions
 
 While powerful, our current implementation has some limitations:
 
@@ -186,7 +257,7 @@ Future research directions include:
 - Adding text-guided editing capabilities
 - Extending to more image domains beyond faces
 
-## References
+## 📋 References
 
 1. Ho, J., Jain, A., & Abbeel, P. (2020). Denoising diffusion probabilistic models.
 2. Ronneberger, O., Fischer, P., & Brox, T. (2015). U-net: Convolutional networks for biomedical image segmentation.
